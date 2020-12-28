@@ -9,7 +9,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/golang/protobuf/jsonpb"
 	"github.com/golang/protobuf/proto"
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/desc/builder"
@@ -31,11 +30,11 @@ import (
 const schemaTypeProtobuf = "PROTOBUF"
 const schemaRegistryRequestTimeout = 30 * time.Second
 
-func NewClient(baseUrl string) *SchemaRegistryClient {
-	return &SchemaRegistryClient{baseUrl: baseUrl}
+func NewClient(baseUrl string) *Client {
+	return &Client{baseUrl: baseUrl}
 }
 
-type SchemaRegistryClient struct {
+type Client struct {
 	baseUrl   string
 	cache0    map[protoreflect.MessageType]uint32 //one-off serialization cache dependent only on the compiled types
 	cache1    map[uint32]*Schema                  //deserialization cache for schema ids (updated by GetSchema and GetSubjectVersion)
@@ -43,12 +42,12 @@ type SchemaRegistryClient struct {
 	tlsConfig *tls.Config
 }
 
-func (c *SchemaRegistryClient) WithTls(config *tls.Config) *SchemaRegistryClient {
+func (c *Client) WithTls(config *tls.Config) *Client {
 	c.tlsConfig = config
 	return c
 }
 
-func (c *SchemaRegistryClient) AutoSerialize(ctx context.Context, subject string, value proto.Message) ([]byte, error) {
+func (c *Client) AutoSerialize(ctx context.Context, subject string, value proto.Message) ([]byte, error) {
 	protoType := proto.MessageReflect(value)
 	schemaId, err := c.RegisterSchemaForType(ctx, subject, protoType)
 	if err != nil {
@@ -57,7 +56,7 @@ func (c *SchemaRegistryClient) AutoSerialize(ctx context.Context, subject string
 	return c.Serialize(schemaId, value)
 }
 
-func (c *SchemaRegistryClient) Serialize(schemaId uint32, value proto.Message) ([]byte, error) {
+func (c *Client) Serialize(schemaId uint32, value proto.Message) ([]byte, error) {
 	wireBytes, err := proto.Marshal(value)
 	if err != nil {
 		return nil, err
@@ -79,7 +78,7 @@ func (c *SchemaRegistryClient) Serialize(schemaId uint32, value proto.Message) (
 
 }
 
-func (c *SchemaRegistryClient) Deserialize(ctx context.Context, data []byte) (proto.Message, error) {
+func (c *Client) Deserialize(ctx context.Context, data []byte) (proto.Message, error) {
 	schemaId := binary.BigEndian.Uint32(data[1:])
 	if schemaId < 1 {
 		return nil, fmt.Errorf("invalid schema id in the serialized value: %v", schemaId)
@@ -114,7 +113,7 @@ func (c *SchemaRegistryClient) Deserialize(ctx context.Context, data []byte) (pr
 	return result, err
 }
 
-func (c *SchemaRegistryClient) RegisterSchemaForType(ctx context.Context, subject string, protoType protoreflect.Message) (uint32, error) {
+func (c *Client) RegisterSchemaForType(ctx context.Context, subject string, protoType protoreflect.Message) (uint32, error) {
 
 	if c.cache0 == nil {
 		c.cache0 = make(map[protoreflect.MessageType]uint32)
@@ -165,7 +164,7 @@ func (c *SchemaRegistryClient) RegisterSchemaForType(ctx context.Context, subjec
 	return id, nil
 }
 
-func (c *SchemaRegistryClient) GetSchema(ctx context.Context, schemaId uint32) (*Schema, error) {
+func (c *Client) GetSchema(ctx context.Context, schemaId uint32) (*Schema, error) {
 	if c.cache1 == nil {
 		c.cache1 = make(map[uint32]*Schema)
 	}
@@ -209,7 +208,7 @@ func (c *SchemaRegistryClient) GetSchema(ctx context.Context, schemaId uint32) (
 	return result, nil
 }
 
-func (c *SchemaRegistryClient) parseSchema(ctx context.Context, definition string, refs references, name *string) (*Schema, error) {
+func (c *Client) parseSchema(ctx context.Context, definition string, refs references, name *string) (*Schema, error) {
 
 	var uniqueName string
 	if name == nil {
@@ -248,7 +247,7 @@ func (c *SchemaRegistryClient) parseSchema(ctx context.Context, definition strin
 	return NewSchema(file)
 }
 
-func (c *SchemaRegistryClient) GetSubjectVersionBySchemaId(ctx context.Context, subject string, schemaId uint32) (int, error) {
+func (c *Client) GetSubjectVersionBySchemaId(ctx context.Context, subject string, schemaId uint32) (int, error) {
 	httpClient := c.getHttpClient()
 	var uri = fmt.Sprintf("%s/schemas/ids/%d/versions", c.baseUrl, schemaId)
 	req, err := http.NewRequest("GET", uri, nil)
@@ -282,7 +281,7 @@ func (c *SchemaRegistryClient) GetSubjectVersionBySchemaId(ctx context.Context, 
 	return 0, fmt.Errorf("subject: %v version not found for schema id: %v", subject, schemaId)
 }
 
-func (c *SchemaRegistryClient) GetSubjectVersion(ctx context.Context, subject string, version int) (*Schema, error) {
+func (c *Client) GetSubjectVersion(ctx context.Context, subject string, version int) (*Schema, error) {
 	httpClient := c.getHttpClient()
 	var uri = fmt.Sprintf("%s/subjects/%s/versions/%d", c.baseUrl, url.PathEscape(subject), version)
 	req, err := http.NewRequest("GET", uri, nil)
@@ -319,7 +318,7 @@ func (c *SchemaRegistryClient) GetSubjectVersion(ctx context.Context, subject st
 	return result, nil
 }
 
-func (c *SchemaRegistryClient) registerSchema(ctx context.Context, subject string, schema *Schema) (uint32, error) {
+func (c *Client) registerSchema(ctx context.Context, subject string, schema *Schema) (uint32, error) {
 	if c.cache2 == nil {
 		c.cache2 = make(map[string]map[Fingerprint]uint32)
 	}
@@ -329,7 +328,7 @@ func (c *SchemaRegistryClient) registerSchema(ctx context.Context, subject strin
 		c.cache2[subject] = s
 	}
 
-	f, err := fingerprintFile(schema.descriptor)
+	f, err := schema.Fingerprint()
 	if err != nil {
 		return 0, err
 	}
@@ -369,7 +368,7 @@ func (c *SchemaRegistryClient) registerSchema(ctx context.Context, subject strin
 
 }
 
-func (c *SchemaRegistryClient) registerReferencedSchemas(ctx context.Context, in protoreflect.FileDescriptor) (references, error) {
+func (c *Client) registerReferencedSchemas(ctx context.Context, in protoreflect.FileDescriptor) (references, error) {
 	var register func(in protoreflect.FileDescriptor) (*desc.FileDescriptor, references, error)
 	register = func(in protoreflect.FileDescriptor) (*desc.FileDescriptor, references, error) {
 		fdpb := protodesc.ToFileDescriptorProto(in)
@@ -410,7 +409,7 @@ func (c *SchemaRegistryClient) registerReferencedSchemas(ctx context.Context, in
 	return ids, err
 }
 
-func (c *SchemaRegistryClient) registerSchemaUnderSubject(ctx context.Context, subject string, definition *desc.FileDescriptor, refs references) (uint32, error) {
+func (c *Client) registerSchemaUnderSubject(ctx context.Context, subject string, definition *desc.FileDescriptor, refs references) (uint32, error) {
 	printer := new(protoprint.Printer)
 	buf := new(bytes.Buffer)
 	err := printer.PrintProtoFile(definition, buf)
@@ -455,168 +454,16 @@ func (c *SchemaRegistryClient) registerSchemaUnderSubject(ctx context.Context, s
 
 }
 
-func (c *SchemaRegistryClient) getHttpClient() *http.Client {
+func (c *Client) getHttpClient() *http.Client {
 	transport := new(http.Transport)
 	transport.TLSClientConfig = c.tlsConfig
 	return &http.Client{Transport: transport}
 }
 
-func (c *SchemaRegistryClient) resolverWithReferences(ctx context.Context, refs references) protodesc.Resolver {
+func (c *Client) resolverWithReferences(ctx context.Context, refs references) protodesc.Resolver {
 	return &versionedResolver{ctx: ctx, registry: c, refs: refs}
 }
 
-type newSchemaRequest struct {
-	SchemaType string     `json:"schemaType"`
-	References references `json:"references"`
-	Schema     string     `json:"schema"`
-}
 
-type references []reference
 
-type reference struct {
-	Name    string `json:"name"`
-	Subject string `json:"subject"`
-	Version int    `json:"version"`
-}
 
-type newSchemaResponse struct {
-	Id uint32 `json:"id"`
-}
-
-type getSchemaResponse struct {
-	Id         uint32     `json:"id"`
-	SchemaType string     `json:"schemaType"`
-	Schema     string     `json:"schema"`
-	References references `json:"references"`
-}
-
-type getSchemaSubjectsResponse []subjectVersion
-
-type subjectVersion struct {
-	Subject string `json:"subject"`
-	Version int    `json:"version"`
-}
-
-type Schema struct {
-	descriptor protoreflect.FileDescriptor
-	definition *desc.FileDescriptor
-}
-
-func NewSchema(d protoreflect.FileDescriptor) (*Schema, error) {
-	var convert func(protoreflect.FileDescriptor, bool) (*desc.FileDescriptor, references, error)
-	convert = func(in protoreflect.FileDescriptor, dive bool) (*desc.FileDescriptor, references, error) {
-		fdpb := protodesc.ToFileDescriptorProto(in)
-		imports := in.Imports()
-		refs := make(references, 0)
-		var deps []*desc.FileDescriptor
-		if dive {
-			for i := 0; i < imports.Len(); i++ {
-				imp := imports.Get(i)
-				dp, rs, err := convert(imp, false)
-				if err != nil {
-					return nil, nil, err
-				}
-				for _, r := range rs {
-					refs = append(refs, r)
-				}
-				deps = append(deps, dp)
-			}
-		}
-		fd, err := desc.CreateFileDescriptor(fdpb, deps...)
-		return fd, refs, err
-	}
-	file, _, err := convert(d, true)
-	if err != nil {
-		return nil, fmt.Errorf("NewSchema.CreateFileDescriptor: %v", err)
-	}
-	return &Schema{
-		definition: file,
-		descriptor: d,
-	}, nil
-}
-
-func fingerprintFile(file protoreflect.FileDescriptor) (*Fingerprint, error) {
-	m := &jsonpb.Marshaler{
-		OrigName:     true,
-		EnumsAsInts:  true,
-		EmitDefaults: false,
-	}
-	pb := protodesc.ToFileDescriptorProto(file)
-	d, err := m.MarshalToString(pb)
-	if err != nil {
-		return nil, err
-	}
-	f := Fingerprint(sha256.Sum256([]byte(d)))
-	return &f, nil
-}
-
-func fingerprintMessage(msg protoreflect.MessageDescriptor) (*Fingerprint, error) {
-	m := &jsonpb.Marshaler{
-		OrigName:     true,
-		EnumsAsInts:  true,
-		EmitDefaults: false,
-	}
-	pb := protodesc.ToDescriptorProto(msg)
-	d, err := m.MarshalToString(pb)
-	if err != nil {
-		return nil, err
-	}
-	f := Fingerprint(sha256.Sum256([]byte(d)))
-	return &f, nil
-}
-
-type Fingerprint [32]byte
-
-func (f *Fingerprint) Equal(other *Fingerprint) bool {
-	for i, b := range f {
-		if other[i] != b {
-			return false
-		}
-	}
-	return true
-}
-
-type versionedResolver struct {
-	ctx      context.Context
-	registry *SchemaRegistryClient
-	refs     references
-}
-
-func (r *versionedResolver) FindFileByPath(subject string) (protoreflect.FileDescriptor, error) {
-	for _, ref := range r.refs {
-		if ref.Subject == subject {
-			schema, err := r.registry.GetSubjectVersion(r.ctx, subject, ref.Version)
-			if err != nil {
-				return nil, err
-			}
-			return schema.descriptor, nil
-		}
-	}
-	return nil, protoregistry.NotFound
-}
-
-func (r *versionedResolver) FindDescriptorByName(name protoreflect.FullName) (protoreflect.Descriptor, error) {
-	for _, ref := range r.refs {
-		schema, err := r.registry.GetSubjectVersion(r.ctx, ref.Subject, ref.Version)
-		if err != nil {
-
-		}
-		if schema == nil {
-			return nil, protoregistry.NotFound
-		}
-		matchParent := false
-		for p := name.Parent(); p != ""; p = p.Parent() {
-			if strings.HasSuffix(string(p), string(schema.descriptor.FullName())) {
-				matchParent = true
-			}
-		}
-		if !matchParent {
-			continue
-		}
-		if m := schema.descriptor.Messages().ByName(name.Name()); m != nil {
-			return m, nil
-		}
-
-	}
-	return nil, protoregistry.NotFound
-}
