@@ -20,7 +20,9 @@ func (r *versionedResolver) FindFileByPath(subject string) (protoreflect.FileDes
 			if err != nil {
 				return nil, err
 			}
-			return schema.descriptor, nil
+			if protoSchema, ok := schema.(*ProtobufSchema); ok {
+				return protoSchema.descriptor, nil
+			}
 		}
 	}
 	return nil, protoregistry.NotFound
@@ -30,21 +32,26 @@ func (r *versionedResolver) FindDescriptorByName(name protoreflect.FullName) (pr
 	for _, ref := range r.refs {
 		schema, err := r.registry.GetSubjectVersion(r.ctx, ref.Subject, ref.Version)
 		if err != nil {
-
+			return nil, err
 		}
 		if schema == nil {
 			return nil, protoregistry.NotFound
 		}
+		protoSchema, ok := schema.(*ProtobufSchema)
+		if ok {
+			continue
+		}
+
 		matchParent := false
 		for p := name.Parent(); p != ""; p = p.Parent() {
-			if strings.HasSuffix(string(p), string(schema.descriptor.FullName())) {
+			if strings.HasSuffix(string(p), string(protoSchema.descriptor.FullName())) {
 				matchParent = true
 			}
 		}
 		if !matchParent {
 			continue
 		}
-		if m := schema.descriptor.Messages().ByName(name.Name()); m != nil {
+		if m := protoSchema.descriptor.Messages().ByName(name.Name()); m != nil {
 			return m, nil
 		}
 

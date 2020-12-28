@@ -1,20 +1,79 @@
 package schema_registry
 
 import (
-	"crypto/sha256"
+	"bytes"
 	"fmt"
-	"github.com/golang/protobuf/jsonpb"
+	"github.com/amient/avro"
 	"github.com/jhump/protoreflect/desc"
+	"github.com/jhump/protoreflect/desc/protoprint"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-type Schema struct {
+//type Fingerprint [32]byte
+
+type Schema interface {
+	//Fingerprint() (*Fingerprint, error)
+	Render() (string, error)
+	Type() string
+}
+
+type AvroSchema struct {
+	schema avro.Schema
+}
+
+func (s *AvroSchema) Type() string {
+	return schemaTypeAvro
+}
+
+//func (s *AvroSchema) Fingerprint() (*Fingerprint, error) {
+//	f, err := s.schema.Fingerprint()
+//	if err != nil {
+//		return nil, err
+//	}
+//	fp := Fingerprint(*f)
+//	return &fp, nil
+//}
+
+func (s *AvroSchema) Render() (string, error) {
+	return s.schema.String(), nil
+}
+
+type ProtobufSchema struct {
 	descriptor protoreflect.FileDescriptor
 	definition *desc.FileDescriptor
 }
 
-func NewSchema(d protoreflect.FileDescriptor) (*Schema, error) {
+func (s *ProtobufSchema) Type() string {
+	return schemaTypeProtobuf
+}
+
+func (s *ProtobufSchema) Render() (string, error) {
+	printer := new(protoprint.Printer)
+	buf := new(bytes.Buffer)
+	err := printer.PrintProtoFile(s.definition, buf)
+	if err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+//func (s *ProtobufSchema) Fingerprint() (*Fingerprint, error) {
+//	m := &jsonpb.Marshaler{
+//		OrigName:     true,
+//		EnumsAsInts:  true,
+//		EmitDefaults: false,
+//	}
+//	pb := protodesc.ToFileDescriptorProto(s.descriptor)
+//	d, err := m.MarshalToString(pb)
+//	if err != nil {
+//		return nil, err
+//	}
+//	f := Fingerprint(sha256.Sum256([]byte(d)))
+//	return &f, nil
+//}
+
+func NewProtobufSchema(d protoreflect.FileDescriptor) (*ProtobufSchema, error) {
 	var convert func(protoreflect.FileDescriptor, bool) (*desc.FileDescriptor, references, error)
 	convert = func(in protoreflect.FileDescriptor, dive bool) (*desc.FileDescriptor, references, error) {
 		fdpb := protodesc.ToFileDescriptorProto(in)
@@ -41,35 +100,20 @@ func NewSchema(d protoreflect.FileDescriptor) (*Schema, error) {
 	if err != nil {
 		return nil, fmt.Errorf("NewSchema.CreateFileDescriptor: %v", err)
 	}
-	return &Schema{
+	return &ProtobufSchema{
 		definition: file,
 		descriptor: d,
 	}, nil
 }
 
-func (s Schema) Fingerprint() (*Fingerprint, error) {
-	m := &jsonpb.Marshaler{
-		OrigName:     true,
-		EnumsAsInts:  true,
-		EmitDefaults: false,
-	}
-	pb := protodesc.ToFileDescriptorProto(s.descriptor)
-	d, err := m.MarshalToString(pb)
-	if err != nil {
-		return nil, err
-	}
-	f := Fingerprint(sha256.Sum256([]byte(d)))
-	return &f, nil
-}
+//func (f *Fingerprint) Equal(other *Fingerprint) bool {
+//	for i, b := range f {
+//		if other[i] != b {
+//			return false
+//		}
+//	}
+//	return true
+//}
 
-type Fingerprint [32]byte
 
-func (f *Fingerprint) Equal(other *Fingerprint) bool {
-	for i, b := range f {
-		if other[i] != b {
-			return false
-		}
-	}
-	return true
-}
 
