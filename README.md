@@ -1,0 +1,1 @@
+# go-schema-registry-client
