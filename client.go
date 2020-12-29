@@ -34,10 +34,9 @@ func NewClientWithTls(baseUrl string, config *tls.Config) *Client {
 
 type Client struct {
 	baseUrl    string
+	tlsConfig  *tls.Config
 	cacheProto map[protoreflect.MessageType]uint32 //one-off serialization cache dependent only on the compiled types
 	cache1     map[uint32]Schema                   //deserialization cache for schema ids (updated by GetSchema and GetSubjectVersion)
-	//cache2     map[string]map[Fingerprint]uint32
-	tlsConfig  *tls.Config
 }
 
 func (c *Client) Serialize(ctx context.Context, subject string, value interface{}) ([]byte, error) {
@@ -232,63 +231,6 @@ func (c *Client) GetSubjectVersion(ctx context.Context, subject string, version 
 	c.cache1[response.Id] = result
 	return result, nil
 }
-
-//func (c *Client) registerSchema(ctx context.Context, subject string, schema Schema) (uint32, error) {
-//	if c.cache2 == nil {
-//		c.cache2 = make(map[string]map[Fingerprint]uint32)
-//	}
-//	var subjectCache map[Fingerprint]uint32
-//	if subjectCache = c.cache2[subject]; subjectCache == nil {
-//		subjectCache = make(map[Fingerprint]uint32)
-//		c.cache2[subject] = subjectCache
-//	}
-//
-//	f, err := schema.Fingerprint()
-//	if err != nil {
-//		return 0, err
-//	}
-//
-//	result, ok := subjectCache[*f]
-//	if ok {
-//		return result, nil
-//	}
-//
-//	//refs := make(references, 0)
-//	//messages := schema.descriptor.Messages()
-//	//for i := 0; i < messages.Len(); i++ {
-//	//	message := messages.Get(i)
-//	//	fields := message.Fields()
-//	//	for f := 0; f < fields.Len(); f++ {
-//	//		field := fields.Get(f)
-//	//		switch field.Kind() {
-//	//		case protoreflect.MessageKind:
-//	//			fallthrough
-//	//		case protoreflect.GroupKind:
-//	//			drefs, err := c.registerReferencedSchemas(ctx, field.Message().ParentFile())
-//	//			if err != nil {
-//	//				return 0, err
-//	//			}
-//	//			for _, r := range drefs {
-//	//				refs = append(refs, r)
-//	//			}
-//	//		}
-//	//	}
-//	//}
-//	body, err := schema.Render()
-//	if err != nil {
-//		return 0, err
-//	}
-//	result, err = c.registerSchemaUnderSubject(ctx, subject, schema.Type(), body, refs)
-//	if err != nil {
-//		return 0, err
-//	}
-//	log.Printf("Got Schema ID: %v for subject %v type %v", result, subject, schema.descriptor.FullName())
-//	subjectCache[*f] = result
-//
-//
-//	return result, nil
-//
-//}
 
 func (c *Client) registerSchemaUnderSubject(ctx context.Context, subject, schemaType string, definition string, refs references) (uint32, error) {
 	request := &newSchemaRequest{
