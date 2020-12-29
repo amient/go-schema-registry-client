@@ -45,11 +45,17 @@ func (c *Client) Serialize(ctx context.Context, subject string, value interface{
 	var wireBytes []byte
 	switch typedValue := value.(type) {
 	case avro.GenericRecord:
-		schemaId, err = c.RegisterAvroType(ctx, subject, typedValue.Schema())
+		writerSchema := typedValue.Schema()
+		schemaId, err = c.RegisterAvroType(ctx, subject, writerSchema)
 		if err != nil {
 			return nil, err
 		}
-		err = fmt.Errorf("implement me:  serialize binary avro")
+		writer := avro.NewGenericDatumWriter().SetSchema(writerSchema)
+		buf := new(bytes.Buffer)
+		if err := writer.Write(typedValue, avro.NewBinaryEncoder(buf)); err != nil {
+			return nil, err
+		}
+		wireBytes = buf.Bytes()
 	case proto.Message:
 		protoType := proto.MessageReflect(typedValue)
 		schemaId, err = c.RegisterProtobufType(ctx, subject, protoType)
