@@ -38,7 +38,7 @@ func (r *versionedResolver) FindDescriptorByName(name protoreflect.FullName) (pr
 			return nil, protoregistry.NotFound
 		}
 		protoSchema, ok := schema.(*ProtobufSchema)
-		if ok {
+		if !ok {
 			continue
 		}
 

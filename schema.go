@@ -58,6 +58,14 @@ func (s *ProtobufSchema) Render() (string, error) {
 	return buf.String(), nil
 }
 
+func (s *ProtobufSchema) Print() {
+	r, err := s.Render()
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(r)
+}
+
 //func (s *ProtobufSchema) Fingerprint() (*Fingerprint, error) {
 //	m := &jsonpb.Marshaler{
 //		OrigName:     true,

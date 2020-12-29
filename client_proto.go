@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
 	"io"
 	"io/ioutil"
@@ -39,23 +40,21 @@ func (c *Client) RegisterProtobufType(ctx context.Context, subject string, proto
 	if err != nil {
 		return 0, fmt.Errorf("RegisterSchemaForValue.parentFileSchema: %v", err)
 	}
-	b := builder.NewFile(fmt.Sprintf("%v.proto", md.FullName())).
+
+	b := builder.NewFile(fmt.Sprintf("%v", md.ParentFile().Path())).
 		SetPackageName(parentFileSchema.definition.GetPackage()).
 		SetProto3(parentFileSchema.definition.IsProto3())
 	msg := parentFileSchema.definition.FindMessage(string(md.FullName()))
 	if msg == nil {
 		return 0, fmt.Errorf("RegisterSchemaForValue.FindMessage: not  found: %s", md.FullName())
 	}
-	m, err := builder.FromMessage(msg)
-	if err != nil {
-		return 0, fmt.Errorf("RegisterSchemaForValue.FromMessage: %v", err)
-	}
-	b.AddMessage(m)
+	c.addMessage(b, msg)
 	f, err := b.Build()
 	if err != nil {
 		return 0, fmt.Errorf("RegisterSchemaForValue.Build: %v", err)
 	}
-	pfd, err := protodesc.NewFile(f.AsFileDescriptorProto(), c.resolverWithReferences(ctx, refs))
+	fd := f.AsFileDescriptorProto()
+	pfd, err := protodesc.NewFile(fd, c.resolverWithReferences(ctx, refs))
 	if err != nil {
 		return 0, fmt.Errorf("RegisterSchemaForValue.NewFile: %v", err)
 	}
@@ -75,11 +74,83 @@ func (c *Client) RegisterProtobufType(ctx context.Context, subject string, proto
 	return id, nil
 }
 
+func (c *Client) addMessage(b *builder.FileBuilder, d *desc.MessageDescriptor) error {
+
+	messages := make(map[string]*builder.MessageBuilder)
+	var process func(field *desc.FieldDescriptor) (*builder.FieldBuilder, error)
+	traverse := func(msg *desc.MessageDescriptor) (*builder.MessageBuilder, error) {
+		m, ok := messages[msg.GetName()]
+		if ok {
+			return m, nil
+		}
+		m = builder.NewMessage(msg.GetName())
+		messages[msg.GetName()] = m
+		for _, field := range msg.GetFields() {
+			f, err := process(field)
+			if err != nil {
+				return nil, err
+			}
+			m.AddField(f)
+		}
+		return m, nil
+	}
+	process = func(field *desc.FieldDescriptor) (*builder.FieldBuilder, error) {
+		if field.GetType() == descriptorpb.FieldDescriptorProto_TYPE_MESSAGE {
+			ref := field.GetMessageType()
+			if ref.GetFile().GetFullyQualifiedName() == b.GetFile().GetName() {
+				if field.IsMap() {
+					//map keys and values are treated recursively
+					mk, err := process(field.GetMapKeyType())
+					if err != nil {
+						return nil, err
+					}
+					mv, err := process(field.GetMapValueType())
+					if err != nil {
+						return nil, err
+					}
+					return builder.NewMapField(field.GetName(), mk.GetType(), mv.GetType()), nil
+				}
+				mb, err := traverse(ref)
+				if err != nil {
+					return nil, err
+				}
+				//adopt locally referenced message from the same file
+				f := builder.NewField(field.GetName(), builder.FieldTypeMessage(mb))
+				if field.IsRepeated() {
+					f.SetRepeated()
+				}
+				if field.IsRequired() {
+					f.SetRepeated()
+				}
+				if field.IsProto3Optional() {
+					f.SetProto3Optional(true)
+				}
+				f.SetJsonName(field.GetJSONName())
+				f.SetLabel(field.GetLabel())
+				f.SetNumber(field.GetNumber())
+				f.SetOptions(field.GetFieldOptions())
+				return f, nil
+			}
+		}
+		//otherwise just clone the original field
+		return builder.FromField(field)
+	}
+	_, err := traverse(d)
+	if err != nil {
+		return err
+	}
+	for _, local := range messages {
+		b.AddMessage(local)
+	}
+	return nil
+
+}
+
 func (c *Client) deserializeProtobuf(ctx context.Context, schema *ProtobufSchema, data []byte) (proto.Message, error) {
 	//serialized data gave file descriptors containing exactly one message
 	m := schema.descriptor.Messages()
-	if m.Len() != 1 {
-		return nil, fmt.Errorf("serialized types are expected to have proto descriptors containing exactly one message, got: %d", m.Len())
+	if m.Len() == 0 {
+		return nil, fmt.Errorf("serialized types are expected to have at least one message descriptor")
 	}
 	md := m.Get(0)
 
@@ -125,22 +196,17 @@ func (c *Client) parseProtobufSchema(ctx context.Context, definition string, ref
 	if err != nil {
 		return nil, err
 	}
-	//for _, m := range fd.MessageType {
-	//	fmt.Println("???", m.GetName())
-	//}
 
 	file, err := protodesc.NewFile(fd, c.resolverWithReferences(ctx, refs))
 	if err != nil {
 		return nil, fmt.Errorf("could not resolve proto message by parsing: %v", err)
 	}
-	//messages := file.Messages()
-	//for i := 0; i < messages.Len(); i++ {
-	//	fmt.Println("###", messages.Get(i).Name())
-	//}
+
 	return NewProtobufSchema(file)
+
 }
 
-func (c *Client) registerReferencedProtoSchemas(ctx context.Context, in protoreflect.FileDescriptor) (references, error) {
+func (c *Client) registerReferencedProtoSchemas(ctx context.Context, file protoreflect.FileDescriptor) (references, error) {
 	var register func(in protoreflect.FileDescriptor) (*desc.FileDescriptor, references, error)
 	register = func(in protoreflect.FileDescriptor) (*desc.FileDescriptor, references, error) {
 		fdpb := protodesc.ToFileDescriptorProto(in)
@@ -183,8 +249,20 @@ func (c *Client) registerReferencedProtoSchemas(ctx context.Context, in protoref
 		})
 		return fd, refs, nil
 	}
-	_, ids, err := register(in)
-	return ids, err
+
+	refs := make(references, 0)
+	imports := file.Imports()
+	for i := 0; i < imports.Len(); i ++ {
+		_, irefs, err := register(imports.Get(i))
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range irefs {
+			refs = append(refs, r)
+		}
+	}
+
+	return refs, nil
 }
 
 func (c *Client) resolverWithReferences(ctx context.Context, refs references) protodesc.Resolver {
