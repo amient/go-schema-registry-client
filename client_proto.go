@@ -168,12 +168,12 @@ func (c *Client) deserializeProtobuf(ctx context.Context, schema *ProtobufSchema
 		//otherwise resolve with dynamicpb
 		result = dynamicpb.NewMessage(md)
 	}
-	err = c.deserializeProtobufInto(ctx, data, result)
+	err = c.deserializeProtobufInto(ctx, data[5:], result)
 	return result, err
 }
 
-func (c *Client) deserializeProtobufInto(_ context.Context, data []byte, result proto.Message) error {
-	return proto.Unmarshal(data, result)
+func (c *Client) deserializeProtobufInto(_ context.Context, payload []byte, result proto.Message) error {
+	return proto.Unmarshal(payload, result)
 }
 
 func (c *Client) parseProtobufSchema(ctx context.Context, definition string, refs references, name *string) (*ProtobufSchema, error) {

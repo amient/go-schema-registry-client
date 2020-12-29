@@ -36,18 +36,18 @@ func (c *Client) registerReferencedAvroSchemas(_ context.Context, _ avro.Schema)
 func (c *Client) deserializeAvro(_ context.Context, schema *AvroSchema, data []byte) (*avro.GenericRecord, error) {
 	decodedRecord := avro.NewGenericRecord(schema.avro)
 	reader := avro.NewDatumReader(schema.avro)
-	if err := reader.Read(decodedRecord, avro.NewBinaryDecoder(data)); err != nil {
+	if err := reader.Read(decodedRecord, avro.NewBinaryDecoder(data[5:])); err != nil {
 		return nil, err
 	}
 	return decodedRecord, nil
 }
 
-func (c *Client) deserializeAvroInto(_ context.Context, schema *AvroSchema, data []byte, value avro.AvroRecord) error {
+func (c *Client) deserializeAvroInto(_ context.Context, schema *AvroSchema, payload []byte, value avro.AvroRecord) error {
 	reader, err := avro.NewDatumProjector(value.Schema(), schema.avro)
 	if err != nil {
 		return err
 	}
-	if err := reader.Read(value, avro.NewBinaryDecoder(data)); err != nil {
+	if err := reader.Read(value, avro.NewBinaryDecoder(payload)); err != nil {
 		return err
 	}
 	return nil

@@ -24,6 +24,8 @@ const schemaTypeProtobuf = "PROTOBUF"
 
 const schemaRegistryRequestTimeout = 30 * time.Second
 
+const magicByte = 0
+
 func NewClient(baseUrl string) *Client {
 	return NewClientWithTls(baseUrl, nil)
 }
@@ -78,7 +80,7 @@ func (c *Client) Serialize(ctx context.Context, subject string, value interface{
 		return nil, err
 	}
 	buf := new(bytes.Buffer)
-	err = buf.WriteByte(0) // write magic byte
+	err = buf.WriteByte(magicByte) // write magic byte
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +96,9 @@ func (c *Client) Serialize(ctx context.Context, subject string, value interface{
 }
 
 func (c *Client) Deserialize(ctx context.Context, data []byte) (interface{}, error) {
+	if data[0] != magicByte {
+		return nil, fmt.Errorf("invalid magic byte expecting %v got: %v", magicByte, data[0])
+	}
 	schemaId := binary.BigEndian.Uint32(data[1:])
 	if schemaId < 1 {
 		return nil, fmt.Errorf("invalid schema id in the serialized value: %v", schemaId)
@@ -104,17 +109,27 @@ func (c *Client) Deserialize(ctx context.Context, data []byte) (interface{}, err
 	}
 
 	if protoSchema, ok := schema.(*ProtobufSchema); ok {
-		return c.deserializeProtobuf(ctx, protoSchema, data)
+		msg, err := c.deserializeProtobuf(ctx, protoSchema, data)
+		if err != nil {
+			err = fmt.Errorf("deserializeProtobuf: %v", err)
+		}
+		return msg, err
 	}
 	if avroSchema, ok := schema.(*AvroSchema); ok {
-		return c.deserializeAvro(ctx, avroSchema, data)
+		msg, err := c.deserializeAvro(ctx, avroSchema, data)
+		if err != nil {
+			err = fmt.Errorf("deserializeAvro: %v", err)
+		}
+		return msg, err
 	}
 	return nil, fmt.Errorf("unsupported schema type: %v", reflect.TypeOf(schema))
 
 }
 
 func (c *Client) DeserializeInto(ctx context.Context, data []byte, into interface{}) error {
-
+	if data[0] != magicByte {
+		return fmt.Errorf("invalid magic byte expecting %v got: %v", magicByte, data[0])
+	}
 	lookup := func() (Schema, error) {
 		schemaId := binary.BigEndian.Uint32(data[1:])
 		if schemaId < 1 {
@@ -128,13 +143,13 @@ func (c *Client) DeserializeInto(ctx context.Context, data []byte, into interfac
 	}
 	switch typedValue := into.(type) {
 	case proto.Message:
-		return c.deserializeProtobufInto(ctx, data, typedValue)
+		return c.deserializeProtobufInto(ctx, data[5:], typedValue)
 	case avro.AvroRecord:
 		schema, err := lookup()
 		if err != nil {
 			return err
 		}
-		return c.deserializeAvroInto(ctx, schema.(*AvroSchema), data, typedValue)
+		return c.deserializeAvroInto(ctx, schema.(*AvroSchema), data[5:], typedValue)
 	default:
 		return fmt.Errorf("unsupported value type: %v", reflect.TypeOf(typedValue))
 	}
