@@ -1,3 +1,4 @@
 # go-schema-registry-client
 
-ProtoBuf native implementation of the schema registry
+Go implementation of ProtoBuf and Avro schema registry client with resolvers and Specific/Generic serialization and 
+deserialization features.

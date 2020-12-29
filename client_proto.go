@@ -23,9 +23,6 @@ import (
 
 func (c *Client) RegisterProtobufType(ctx context.Context, subject string, protoType protoreflect.Message) (uint32, error) {
 
-	if c.cacheProto == nil {
-		c.cacheProto = make(map[protoreflect.MessageType]uint32)
-	}
 	if id, ok := c.cacheProto[protoType.Type()]; ok {
 		return id, nil
 	}
@@ -33,12 +30,12 @@ func (c *Client) RegisterProtobufType(ctx context.Context, subject string, proto
 	md := protoType.Descriptor()
 	refs, err := c.registerReferencedProtoSchemas(ctx, md.ParentFile())
 	if err != nil {
-		return 0, fmt.Errorf("RegisterSchemaForValue.registerReferencedSchemas: %v", err)
+		return 0, fmt.Errorf("RegisterProtobufType.registerReferencedProtoSchemas: %v", err)
 	}
 
 	parentFileSchema, err := NewProtobufSchema(md.ParentFile())
 	if err != nil {
-		return 0, fmt.Errorf("RegisterSchemaForValue.parentFileSchema: %v", err)
+		return 0, fmt.Errorf("RegisterProtobufType.NewProtobufSchema: %v", err)
 	}
 
 	b := builder.NewFile(fmt.Sprintf("%v", md.ParentFile().Path())).
@@ -46,17 +43,20 @@ func (c *Client) RegisterProtobufType(ctx context.Context, subject string, proto
 		SetProto3(parentFileSchema.definition.IsProto3())
 	msg := parentFileSchema.definition.FindMessage(string(md.FullName()))
 	if msg == nil {
-		return 0, fmt.Errorf("RegisterSchemaForValue.FindMessage: not  found: %s", md.FullName())
+		return 0, fmt.Errorf("RegisterProtobufType.FindMessage: not  found: %s", md.FullName())
 	}
-	c.addMessage(b, msg)
+	err = c.addMessage(b, msg)
+	if err != nil {
+		return 0, fmt.Errorf("RegisterProtobufType.addMessage: not  found: %s", md.FullName())
+	}
 	f, err := b.Build()
 	if err != nil {
-		return 0, fmt.Errorf("RegisterSchemaForValue.Build: %v", err)
+		return 0, fmt.Errorf("RegisterProtobufType.Build: %v", err)
 	}
 	fd := f.AsFileDescriptorProto()
 	pfd, err := protodesc.NewFile(fd, c.resolverWithReferences(ctx, refs))
 	if err != nil {
-		return 0, fmt.Errorf("RegisterSchemaForValue.NewFile: %v", err)
+		return 0, fmt.Errorf("RegisterProtobufType.NewFile: %v", err)
 	}
 	schema := &ProtobufSchema{
 		definition: f,
@@ -168,8 +168,12 @@ func (c *Client) deserializeProtobuf(ctx context.Context, schema *ProtobufSchema
 		//otherwise resolve with dynamicpb
 		result = dynamicpb.NewMessage(md)
 	}
-	err = proto.Unmarshal(data[5:], result)
+	err = c.deserializeProtobufInto(ctx, data, result)
 	return result, err
+}
+
+func (c *Client) deserializeProtobufInto(_ context.Context, data []byte, result proto.Message) error {
+	return proto.Unmarshal(data, result)
 }
 
 func (c *Client) parseProtobufSchema(ctx context.Context, definition string, refs references, name *string) (*ProtobufSchema, error) {

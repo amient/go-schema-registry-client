@@ -25,18 +25,26 @@ const schemaTypeProtobuf = "PROTOBUF"
 const schemaRegistryRequestTimeout = 30 * time.Second
 
 func NewClient(baseUrl string) *Client {
-	return &Client{baseUrl: baseUrl}
+	return NewClientWithTls(baseUrl, nil)
 }
 
 func NewClientWithTls(baseUrl string, config *tls.Config) *Client {
-	return &Client{baseUrl: baseUrl, tlsConfig: config}
+	return &Client{
+		baseUrl:    baseUrl,
+		tlsConfig:  config,
+		cache1:     make(map[uint32]Schema),
+		cacheProto: make(map[protoreflect.MessageType]uint32),
+		cacheAvro:  make(map[avro.Fingerprint]uint32),
+	}
 }
 
 type Client struct {
 	baseUrl    string
 	tlsConfig  *tls.Config
-	cacheProto map[protoreflect.MessageType]uint32 //one-off serialization cache dependent only on the compiled types
 	cache1     map[uint32]Schema                   //deserialization cache for schema ids (updated by GetSchema and GetSubjectVersion)
+	cacheProto map[protoreflect.MessageType]uint32 //one-off serialization cache for compiled protobuf types
+	cacheAvro  map[avro.Fingerprint]uint32         //one-off serialization cache for avro schemas
+
 }
 
 func (c *Client) Serialize(ctx context.Context, subject string, value interface{}) ([]byte, error) {
@@ -44,7 +52,7 @@ func (c *Client) Serialize(ctx context.Context, subject string, value interface{
 	var err error
 	var wireBytes []byte
 	switch typedValue := value.(type) {
-	case avro.GenericRecord:
+	case avro.AvroRecord:
 		writerSchema := typedValue.Schema()
 		schemaId, err = c.RegisterAvroType(ctx, subject, writerSchema)
 		if err != nil {
@@ -105,54 +113,83 @@ func (c *Client) Deserialize(ctx context.Context, data []byte) (interface{}, err
 
 }
 
-func (c *Client) GetSchema(ctx context.Context, schemaId uint32) (Schema, error) {
-	if c.cache1 == nil {
-		c.cache1 = make(map[uint32]Schema)
-	}
-	result, ok := c.cache1[schemaId]
-	if !ok {
-		httpClient := c.getHttpClient()
-		var uri = fmt.Sprintf("%s/schemas/ids/%d", c.baseUrl, schemaId)
-		req, err := http.NewRequest("GET", uri, nil)
-		if err != nil {
-			return nil, fmt.Errorf("error constructing schema registry http request: %v", err)
-		}
-		ctxTimeout, cancel := context.WithTimeout(ctx, schemaRegistryRequestTimeout)
-		defer cancel()
-		log.Println(req.Method, req.URL)
-		resp, err := httpClient.Do(req.WithContext(ctxTimeout))
-		if err != nil {
-			return nil, fmt.Errorf("error calling schema registry http client: %v", err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != 200 {
-			return nil, fmt.Errorf("unexpected response from the schema registry: %v", resp.StatusCode)
-		}
-		body, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			return nil, err
-		}
-		response := new(getSchemaResponse)
-		err = json.Unmarshal(body, response)
-		if err != nil {
-			return nil, fmt.Errorf("error while unmarshalling schema registry: %v", err)
-		}
-		switch response.SchemaType {
-		case schemaTypeProtobuf:
-			result, err = c.parseProtobufSchema(ctxTimeout, response.Schema, response.References, nil)
-		case schemaTypeDefault:
-			fallthrough
-		case schemaTypeAvro:
-			result, err = c.parseAvroSchema(ctxTimeout, response.Schema, response.References, nil)
-		default:
-			return nil, fmt.Errorf("unexpected schema type: %v", response.SchemaType)
-		}
+func (c *Client) DeserializeInto(ctx context.Context, data []byte, into interface{}) error {
 
-		if err != nil {
-			return nil, fmt.Errorf("error parsing schema registry response: %v", err)
+	lookup := func() (Schema, error) {
+		schemaId := binary.BigEndian.Uint32(data[1:])
+		if schemaId < 1 {
+			return nil, fmt.Errorf("invalid schema id in the serialized value: %v", schemaId)
 		}
-		c.cache1[schemaId] = result
+		schema, err := c.GetSchema(ctx, schemaId)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get schema id %d: %v", schemaId, err)
+		}
+		return schema, nil
 	}
+	switch typedValue := into.(type) {
+	case proto.Message:
+		return c.deserializeProtobufInto(ctx, data, typedValue)
+	case avro.AvroRecord:
+		schema, err := lookup()
+		if err != nil {
+			return err
+		}
+		return c.deserializeAvroInto(ctx, schema.(*AvroSchema), data, typedValue)
+	default:
+		return fmt.Errorf("unsupported value type: %v", reflect.TypeOf(typedValue))
+	}
+}
+
+func (c *Client) GetSchema(ctx context.Context, schemaId uint32) (Schema, error) {
+	result, ok := c.cache1[schemaId]
+	if ok {
+		return result, nil
+	}
+	httpClient := c.getHttpClient()
+	var uri = fmt.Sprintf("%s/schemas/ids/%d", c.baseUrl, schemaId)
+	req, err := http.NewRequest("GET", uri, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error constructing schema registry http request: %v", err)
+	}
+	ctxTimeout, cancel := context.WithTimeout(ctx, schemaRegistryRequestTimeout)
+	defer cancel()
+	log.Println(req.Method, req.URL)
+	resp, err := httpClient.Do(req.WithContext(ctxTimeout))
+	if err != nil {
+		return nil, fmt.Errorf("error calling schema registry http client: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("unexpected response from the schema registry: %v", resp.StatusCode)
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	err = resp.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	response := new(getSchemaResponse)
+	err = json.Unmarshal(body, response)
+	if err != nil {
+		return nil, fmt.Errorf("error while unmarshalling schema registry: %v", err)
+	}
+	switch response.SchemaType {
+	case schemaTypeProtobuf:
+		result, err = c.parseProtobufSchema(ctxTimeout, response.Schema, response.References, nil)
+	case schemaTypeDefault:
+		fallthrough
+	case schemaTypeAvro:
+		result, err = c.parseAvroSchema(ctxTimeout, response.Schema, response.References, nil)
+	default:
+		return nil, fmt.Errorf("unexpected schema type: %v", response.SchemaType)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("error parsing schema registry response: %v", err)
+	}
+	c.cache1[schemaId] = result
+
 	return result, nil
 }
 
@@ -282,6 +319,3 @@ func (c *Client) getHttpClient() *http.Client {
 	transport.TLSClientConfig = c.tlsConfig
 	return &http.Client{Transport: transport}
 }
-
-
-

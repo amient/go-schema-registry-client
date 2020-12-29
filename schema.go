@@ -19,7 +19,7 @@ type Schema interface {
 }
 
 type AvroSchema struct {
-	schema avro.Schema
+	avro avro.Schema
 }
 
 func (s *AvroSchema) Type() string {
@@ -36,7 +36,7 @@ func (s *AvroSchema) Type() string {
 //}
 
 func (s *AvroSchema) Render() (string, error) {
-	return s.schema.String(), nil
+	return s.avro.String(), nil
 }
 
 type ProtobufSchema struct {
