@@ -3,7 +3,6 @@ package schema_registry
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -27,13 +26,15 @@ const schemaRegistryRequestTimeout = 30 * time.Second
 const magicByte = 0
 
 func NewClient(baseUrl string) *Client {
-	return NewClientWithTls(baseUrl, nil)
+	return NewClientWithTls(baseUrl, &Config{
+		LogLevel: LogNothing,
+	})
 }
 
-func NewClientWithTls(baseUrl string, config *tls.Config) *Client {
+func NewClientWithTls(baseUrl string, config *Config) *Client {
 	return &Client{
 		baseUrl:    baseUrl,
-		tlsConfig:  config,
+		config:     config,
 		cache1:     make(map[uint32]Schema),
 		cacheProto: make(map[protoreflect.MessageType]uint32),
 		cacheAvro:  make(map[avro.Fingerprint]uint32),
@@ -41,12 +42,11 @@ func NewClientWithTls(baseUrl string, config *tls.Config) *Client {
 }
 
 type Client struct {
+	config     *Config
 	baseUrl    string
-	tlsConfig  *tls.Config
 	cache1     map[uint32]Schema                   //deserialization cache for schema ids (updated by GetSchema and GetSubjectVersion)
 	cacheProto map[protoreflect.MessageType]uint32 //one-off serialization cache for compiled protobuf types
 	cacheAvro  map[avro.Fingerprint]uint32         //one-off serialization cache for avro schemas
-
 }
 
 func (c *Client) Serialize(ctx context.Context, subject string, value interface{}) ([]byte, error) {
@@ -168,7 +168,9 @@ func (c *Client) GetSchema(ctx context.Context, schemaId uint32) (Schema, error)
 	}
 	ctxTimeout, cancel := context.WithTimeout(ctx, schemaRegistryRequestTimeout)
 	defer cancel()
-	log.Println(req.Method, req.URL)
+	if c.config.LogHttp() {
+		log.Println("schema_registry_client", req.Method, req.URL)
+	}
 	resp, err := httpClient.Do(req.WithContext(ctxTimeout))
 	if err != nil {
 		return nil, fmt.Errorf("error calling schema registry http client: %v", err)
@@ -218,7 +220,9 @@ func (c *Client) GetSubjectVersionBySchemaId(ctx context.Context, subject string
 	req.Header.Set("Content-Type", "application/json")
 	ctxTimeout, cancel := context.WithTimeout(ctx, schemaRegistryRequestTimeout)
 	defer cancel()
-	log.Println(req.Method, req.URL)
+	if c.config.LogHttp() {
+		log.Println("schema_registry_client", req.Method, req.URL)
+	}
 	resp, err := httpClient.Do(req.WithContext(ctxTimeout))
 	if err != nil {
 		return 0, fmt.Errorf("error while making a http request for retreiving subject version: %v", err)
@@ -252,7 +256,9 @@ func (c *Client) GetSubjectVersion(ctx context.Context, subject string, version 
 	req.Header.Set("Content-Type", "application/json")
 	ctxTimeout, cancel := context.WithTimeout(ctx, schemaRegistryRequestTimeout)
 	defer cancel()
-	log.Println(req.Method, req.URL)
+	if c.config.LogHttp() {
+		log.Println("schema_registry_client", req.Method, req.URL)
+	}
 	resp, err := httpClient.Do(req.WithContext(ctxTimeout))
 	if err != nil {
 		return nil, fmt.Errorf("error while making a http request for retreiving schema by subject version: %v", err)
@@ -310,7 +316,9 @@ func (c *Client) registerSchemaUnderSubject(ctx context.Context, subject, schema
 	req.Header.Set("Content-Type", "application/json")
 	ctxTimeout, cancel := context.WithTimeout(ctx, schemaRegistryRequestTimeout)
 	defer cancel()
-	log.Println(req.Method, req.URL)
+	if c.config.LogHttp() {
+		log.Println("schema_registry_client", req.Method, req.URL)
+	}
 	resp, err := httpClient.Do(req.WithContext(ctxTimeout))
 	if err != nil {
 		return 0, fmt.Errorf("error while making a http request for registering a new schema: %v", err)
@@ -331,6 +339,6 @@ func (c *Client) registerSchemaUnderSubject(ctx context.Context, subject, schema
 
 func (c *Client) getHttpClient() *http.Client {
 	transport := new(http.Transport)
-	transport.TLSClientConfig = c.tlsConfig
+	transport.TLSClientConfig = c.config.Tls
 	return &http.Client{Transport: transport}
 }

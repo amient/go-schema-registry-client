@@ -18,6 +18,7 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 	"io"
 	"io/ioutil"
+	"log"
 	"strings"
 )
 
@@ -58,10 +59,15 @@ func (c *Client) RegisterProtobufType(ctx context.Context, subject string, proto
 	if err != nil {
 		return 0, fmt.Errorf("RegisterProtobufType.NewFile: %v", err)
 	}
-	schema := &ProtobufSchema{
-		definition: f,
-		descriptor: pfd,
+
+	//verify that the first type defined in the resultant schema is the requested to be registered
+	primaryType := pfd.Messages().Get(0)
+	if primaryType.FullName() != protoType.Descriptor().FullName() {
+		return 0, fmt.Errorf("registration of proto message %v resulted in a definition with primary message %v",
+			protoType.Descriptor().FullName(), primaryType.FullName())
 	}
+
+	schema := &ProtobufSchema{definition: f, descriptor: pfd}
 	body, err := schema.Render()
 	if err != nil {
 		return 0, err
@@ -71,20 +77,31 @@ func (c *Client) RegisterProtobufType(ctx context.Context, subject string, proto
 		return 0, err
 	}
 	c.cacheProto[protoType.Type()] = id
+	if c.config.LogCaches() {
+		log.Println("schema_registry_client", "cached schema id", id, protoType.Type())
+	}
 	return id, nil
 }
 
 func (c *Client) addMessage(b *builder.FileBuilder, d *desc.MessageDescriptor) error {
 
-	messages := make(map[string]*builder.MessageBuilder)
+	messages := make([]*builder.MessageBuilder, 0)
+	defined := func (name string) *builder.MessageBuilder {
+		for _, m := range messages {
+			if m.GetName() == name {
+				return m
+			}
+		}
+		return nil
+	}
 	var process func(field *desc.FieldDescriptor) (*builder.FieldBuilder, error)
 	traverse := func(msg *desc.MessageDescriptor) (*builder.MessageBuilder, error) {
-		m, ok := messages[msg.GetName()]
-		if ok {
+		m := defined(msg.GetName())
+		if m != nil {
 			return m, nil
 		}
 		m = builder.NewMessage(msg.GetName())
-		messages[msg.GetName()] = m
+		messages = append(messages, m)
 		for _, field := range msg.GetFields() {
 			f, err := process(field)
 			if err != nil {

@@ -14,6 +14,7 @@ func (c *Client) RegisterAvroType(ctx context.Context, subject string, schema av
 	if id, ok := c.cacheAvro[*fp]; ok {
 		return id, nil
 	}
+
 	refs, err := c.registerReferencedAvroSchemas(ctx, schema)
 	if err != nil {
 		return 0, fmt.Errorf("RegisterAvroType.registerReferencedAvroSchemas: %v", err)
