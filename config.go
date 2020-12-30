@@ -12,7 +12,8 @@ const LogEverything LogLevel = 255
 
 type Config struct {
 	LogLevel LogLevel
-	Tls *tls.Config
+	Tls      *tls.Config
+	Url      string
 }
 
 func (c *Config) LogWarnings() bool {

@@ -26,14 +26,14 @@ const schemaRegistryRequestTimeout = 30 * time.Second
 const magicByte = 0
 
 func NewClient(baseUrl string) *Client {
-	return NewClientWithTls(baseUrl, &Config{
+	return NewClientWith(&Config{
+		Url: baseUrl,
 		LogLevel: LogNothing,
 	})
 }
 
-func NewClientWithTls(baseUrl string, config *Config) *Client {
+func NewClientWith(config *Config) *Client {
 	return &Client{
-		baseUrl:    baseUrl,
 		config:     config,
 		cache1:     make(map[uint32]Schema),
 		cacheProto: make(map[protoreflect.MessageType]uint32),
@@ -43,7 +43,6 @@ func NewClientWithTls(baseUrl string, config *Config) *Client {
 
 type Client struct {
 	config     *Config
-	baseUrl    string
 	cache1     map[uint32]Schema                   //deserialization cache for schema ids (updated by GetSchema and GetSubjectVersion)
 	cacheProto map[protoreflect.MessageType]uint32 //one-off serialization cache for compiled protobuf types
 	cacheAvro  map[avro.Fingerprint]uint32         //one-off serialization cache for avro schemas
@@ -161,7 +160,7 @@ func (c *Client) GetSchema(ctx context.Context, schemaId uint32) (Schema, error)
 		return result, nil
 	}
 	httpClient := c.getHttpClient()
-	var uri = fmt.Sprintf("%s/schemas/ids/%d", c.baseUrl, schemaId)
+	var uri = fmt.Sprintf("%s/schemas/ids/%d", c.config.Url, schemaId)
 	req, err := http.NewRequest("GET", uri, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error constructing schema registry http request: %v", err)
@@ -212,7 +211,7 @@ func (c *Client) GetSchema(ctx context.Context, schemaId uint32) (Schema, error)
 
 func (c *Client) GetSubjectVersionBySchemaId(ctx context.Context, subject string, schemaId uint32) (int, error) {
 	httpClient := c.getHttpClient()
-	var uri = fmt.Sprintf("%s/schemas/ids/%d/versions", c.baseUrl, schemaId)
+	var uri = fmt.Sprintf("%s/schemas/ids/%d/versions", c.config.Url, schemaId)
 	req, err := http.NewRequest("GET", uri, nil)
 	if err != nil {
 		return 0, fmt.Errorf("error while creating http request for retreiving subject version: %v", err)
@@ -248,7 +247,7 @@ func (c *Client) GetSubjectVersionBySchemaId(ctx context.Context, subject string
 
 func (c *Client) GetSubjectVersion(ctx context.Context, subject string, version int) (Schema, error) {
 	httpClient := c.getHttpClient()
-	var uri = fmt.Sprintf("%s/subjects/%s/versions/%d", c.baseUrl, url.PathEscape(subject), version)
+	var uri = fmt.Sprintf("%s/subjects/%s/versions/%d", c.config.Url, url.PathEscape(subject), version)
 	req, err := http.NewRequest("GET", uri, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error while creating http request for retreiving schema by subject version: %v", err)
@@ -307,7 +306,7 @@ func (c *Client) registerSchemaUnderSubject(ctx context.Context, subject, schema
 		return 0, fmt.Errorf("could not marshal schema registry request: %v", err)
 	}
 	httpClient := c.getHttpClient()
-	var u = c.baseUrl + "/subjects/" + url.PathEscape(subject) + "/versions"
+	var u = fmt.Sprintf("%s/subjects/%s/versions",  c.config.Url, url.PathEscape(subject))
 	j := new(newSchemaResponse)
 	req, err := http.NewRequest("POST", u, bytes.NewReader(jsonRequest))
 	if err != nil {
