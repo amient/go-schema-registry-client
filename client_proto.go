@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"github.com/golang/protobuf/jsonpb"
 	"github.com/golang/protobuf/proto"
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/desc/builder"
@@ -55,6 +56,13 @@ func (c *Client) RegisterProtobufType(ctx context.Context, subject string, proto
 		return 0, fmt.Errorf("RegisterProtobufType.Build: %v", err)
 	}
 	fd := f.AsFileDescriptorProto()
+
+	if c.config.LogEntities() {
+		m := &jsonpb.Marshaler{Indent: " "}
+		s, _ := m.MarshalToString(fd)
+		log.Println(s)
+	}
+
 	pfd, err := protodesc.NewFile(fd, c.resolverWithReferences(ctx, refs))
 	if err != nil {
 		return 0, fmt.Errorf("RegisterProtobufType.NewFile: %v", err)
@@ -94,7 +102,7 @@ func (c *Client) addMessage(b *builder.FileBuilder, d *desc.MessageDescriptor) e
 		}
 		return nil
 	}
-	var process func(field *desc.FieldDescriptor) (*builder.FieldBuilder, error)
+	var process func(field *desc.FieldDescriptor, enums []*builder.EnumBuilder) (*builder.FieldBuilder, error)
 	traverse := func(msg *desc.MessageDescriptor) (*builder.MessageBuilder, error) {
 		m := defined(msg.GetName())
 		if m != nil {
@@ -102,8 +110,19 @@ func (c *Client) addMessage(b *builder.FileBuilder, d *desc.MessageDescriptor) e
 		}
 		m = builder.NewMessage(msg.GetName())
 		messages = append(messages, m)
+		var enums []*builder.EnumBuilder
+		for _, enum := range msg.GetNestedEnumTypes() {
+			eb := builder.NewEnum(enum.GetName())
+			for _, evb := range enum.GetValues() {
+				eb.AddValue(builder.NewEnumValue(evb.GetName()).SetNumber(evb.GetNumber()))
+			}
+
+			enums = append(enums, eb)
+			m.AddNestedEnum(eb)
+		}
+		//TODO msg.GetNestedMessageTypes()
 		for _, field := range msg.GetFields() {
-			f, err := process(field)
+			f, err := process(field, enums)
 			if err != nil {
 				return nil, err
 			}
@@ -111,17 +130,32 @@ func (c *Client) addMessage(b *builder.FileBuilder, d *desc.MessageDescriptor) e
 		}
 		return m, nil
 	}
-	process = func(field *desc.FieldDescriptor) (*builder.FieldBuilder, error) {
+	process = func(field *desc.FieldDescriptor, enums []*builder.EnumBuilder) (*builder.FieldBuilder, error) {
+		clone := func(src *desc.FieldDescriptor, dst *builder.FieldBuilder) {
+			if src.IsRepeated() {
+				dst.SetRepeated()
+			}
+			if src.IsRequired() {
+				dst.SetRepeated()
+			}
+			if src.IsProto3Optional() {
+				dst.SetProto3Optional(true)
+			}
+			dst.SetJsonName(src.GetJSONName())
+			dst.SetLabel(src.GetLabel())
+			dst.SetNumber(src.GetNumber())
+			dst.SetOptions(src.GetFieldOptions())
+		}
 		if field.GetType() == descriptorpb.FieldDescriptorProto_TYPE_MESSAGE {
 			ref := field.GetMessageType()
 			if ref.GetFile().GetFullyQualifiedName() == b.GetFile().GetName() {
 				if field.IsMap() {
 					//map keys and values are treated recursively
-					mk, err := process(field.GetMapKeyType())
+					mk, err := process(field.GetMapKeyType(), enums)
 					if err != nil {
 						return nil, err
 					}
-					mv, err := process(field.GetMapValueType())
+					mv, err := process(field.GetMapValueType(), enums)
 					if err != nil {
 						return nil, err
 					}
@@ -133,23 +167,36 @@ func (c *Client) addMessage(b *builder.FileBuilder, d *desc.MessageDescriptor) e
 				}
 				//adopt locally referenced message from the same file
 				f := builder.NewField(field.GetName(), builder.FieldTypeMessage(mb))
-				if field.IsRepeated() {
-					f.SetRepeated()
-				}
-				if field.IsRequired() {
-					f.SetRepeated()
-				}
-				if field.IsProto3Optional() {
-					f.SetProto3Optional(true)
-				}
-				f.SetJsonName(field.GetJSONName())
-				f.SetLabel(field.GetLabel())
-				f.SetNumber(field.GetNumber())
-				f.SetOptions(field.GetFieldOptions())
+				clone(field, f)
 				return f, nil
 			}
 		}
 		//otherwise just clone the original field
+		if field.GetType() == descriptorpb.FieldDescriptorProto_TYPE_ENUM {
+			en := field.GetEnumType()
+			var eb *builder.EnumBuilder
+			var err error
+			//if the enum's parent is same as the field's parent then it's a nested enum
+			if en.GetParent().GetFullyQualifiedName() == field.GetParent().GetFullyQualifiedName() {
+				// look for the equivalent adopted nested enum and use it
+				for _, enum := range enums {
+					if enum.GetName() == en.GetName() {
+						eb = enum
+						break
+					}
+				}
+			}
+			if eb == nil {
+				//use imported enum if it's not nested
+				eb, err = builder.FromEnum(en)
+				if err != nil {
+					return nil, err
+				}
+			}
+			f := builder.NewField(field.GetName(), builder.FieldTypeEnum(eb))
+			clone(field, f)
+			return f, nil
+		}
 		return builder.FromField(field)
 	}
 	_, err := traverse(d)

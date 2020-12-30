@@ -8,6 +8,7 @@ const LogNothing LogLevel = 0
 const LogWarnings LogLevel = 1
 const LogHttp LogLevel = 2
 const LogCaches LogLevel = 4
+const LogEntities = 128
 const LogEverything LogLevel = 255
 
 type Config struct {
@@ -26,4 +27,8 @@ func (c *Config) LogHttp() bool {
 
 func (c *Config) LogCaches() bool {
 	return c.LogLevel & LogCaches > 0
+}
+
+func (c *Config) LogEntities() bool {
+	return c.LogLevel & LogEntities > 0
 }
