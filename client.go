@@ -57,7 +57,7 @@ func (c *Client) Serialize(ctx context.Context, subject string, value interface{
 		writerSchema := typedValue.Schema()
 		schemaId, err = c.RegisterAvroType(ctx, subject, writerSchema)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("RegisterAvroType: %v", err)
 		}
 		writer := avro.NewGenericDatumWriter().SetSchema(writerSchema)
 		buf := new(bytes.Buffer)
@@ -77,6 +77,9 @@ func (c *Client) Serialize(ctx context.Context, subject string, value interface{
 	}
 	if err != nil {
 		return nil, err
+	}
+	if schemaId == 0 {
+		panic("no schema registered for type " + reflect.TypeOf(value).String())
 	}
 	buf := new(bytes.Buffer)
 	err = buf.WriteByte(magicByte) // write magic byte

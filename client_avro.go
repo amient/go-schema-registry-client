@@ -20,7 +20,7 @@ func (c *Client) RegisterAvroType(ctx context.Context, subject string, schema av
 		return 0, fmt.Errorf("RegisterAvroType.registerReferencedAvroSchemas: %v", err)
 	}
 
-	id, err := c.registerSchemaUnderSubject(ctx, subject, schemaTypeProtobuf, schema.String(), refs)
+	id, err := c.registerSchemaUnderSubject(ctx, subject, schemaTypeAvro, schema.String(), refs)
 	if err != nil {
 		return 0, err
 	}
