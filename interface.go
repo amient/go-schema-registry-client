@@ -1,4 +1,4 @@
-package schema_registry
+package registry
 
 type newSchemaRequest struct {
 	SchemaType string     `json:"schemaType"`

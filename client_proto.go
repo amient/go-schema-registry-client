@@ -1,4 +1,4 @@
-package schema_registry
+package registry
 
 import (
 	"bytes"
