@@ -29,7 +29,17 @@ func (c *Client) RegisterProtobufType(ctx context.Context, subject string, proto
 		return id, nil
 	}
 
-	md := protoType.Descriptor()
+	id, err := c.registerProtobufType(ctx, subject, protoType.Descriptor())
+	if err == nil {
+		c.cacheProto[protoType.Type()] = id
+		if c.config.LogCaches() {
+			log.Println("schema_registry_client", "cached schema id", id, protoType.Type())
+		}
+	}
+	return id, err
+}
+
+func (c *Client) registerProtobufType(ctx context.Context, subject string, md protoreflect.MessageDescriptor) (uint32, error) {
 
 	refs, err := c.registerReferencedProtoSchemas(ctx, md.ParentFile())
 	if err != nil {
@@ -71,9 +81,9 @@ func (c *Client) RegisterProtobufType(ctx context.Context, subject string, proto
 
 	//verify that the first type defined in the resultant schema is the requested to be registered
 	primaryType := pfd.Messages().Get(0)
-	if primaryType.FullName() != protoType.Descriptor().FullName() {
+	if primaryType.FullName() != md.FullName() {
 		return 0, fmt.Errorf("registration of proto message %v resulted in a definition with primary message %v",
-			protoType.Descriptor().FullName(), primaryType.FullName())
+			md.FullName(), primaryType.FullName())
 	}
 
 	schema := &ProtobufSchema{definition: f, descriptor: pfd}
@@ -85,11 +95,8 @@ func (c *Client) RegisterProtobufType(ctx context.Context, subject string, proto
 	if err != nil {
 		return 0, err
 	}
-	c.cacheProto[protoType.Type()] = id
-	if c.config.LogCaches() {
-		log.Println("schema_registry_client", "cached schema id", id, protoType.Type())
-	}
 	return id, nil
+
 }
 
 func (c *Client) addMessage(b *builder.FileBuilder, d *desc.MessageDescriptor) error {
