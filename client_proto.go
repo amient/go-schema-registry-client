@@ -30,6 +30,7 @@ func (c *Client) RegisterProtobufType(ctx context.Context, subject string, proto
 	}
 
 	md := protoType.Descriptor()
+
 	refs, err := c.registerReferencedProtoSchemas(ctx, md.ParentFile())
 	if err != nil {
 		return 0, fmt.Errorf("RegisterProtobufType.registerReferencedProtoSchemas: %v", err)

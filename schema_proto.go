@@ -15,29 +15,30 @@ type ProtobufSchema struct {
 }
 
 func NewProtobufSchema(d protoreflect.FileDescriptor) (*ProtobufSchema, error) {
-	var convert func(protoreflect.FileDescriptor, bool) (*desc.FileDescriptor, references, error)
-	convert = func(in protoreflect.FileDescriptor, dive bool) (*desc.FileDescriptor, references, error) {
+	var convert func(protoreflect.FileDescriptor) (*desc.FileDescriptor, references, error)
+	convert = func(in protoreflect.FileDescriptor) (*desc.FileDescriptor, references, error) {
 		fdpb := protodesc.ToFileDescriptorProto(in)
 		imports := in.Imports()
 		refs := make(references, 0)
 		var deps []*desc.FileDescriptor
-		if dive {
-			for i := 0; i < imports.Len(); i++ {
-				imp := imports.Get(i)
-				dp, rs, err := convert(imp, false)
-				if err != nil {
-					return nil, nil, err
-				}
-				for _, r := range rs {
-					refs = append(refs, r)
-				}
-				deps = append(deps, dp)
+		for i := 0; i < imports.Len(); i++ {
+			imp := imports.Get(i)
+			dp, rs, err := convert(imp)
+			if err != nil {
+				return nil, nil, err
 			}
+			for _, r := range rs {
+				refs = append(refs, r)
+			}
+			deps = append(deps, dp)
 		}
 		fd, err := desc.CreateFileDescriptor(fdpb, deps...)
+		if err != nil {
+			err = fmt.Errorf("CreateFileDescriptor %s error:%v", *fdpb.Name, err)
+		}
 		return fd, refs, err
 	}
-	file, _, err := convert(d, true)
+	file, _, err := convert(d)
 	if err != nil {
 		return nil, fmt.Errorf("NewSchema.CreateFileDescriptor: %v", err)
 	}
@@ -69,17 +70,3 @@ func (s *ProtobufSchema) Print() {
 	fmt.Println(r)
 }
 
-//func (s *ProtobufSchema) Fingerprint() (*Fingerprint, error) {
-//	m := &jsonpb.Marshaler{
-//		OrigName:     true,
-//		EnumsAsInts:  true,
-//		EmitDefaults: false,
-//	}
-//	pb := protodesc.ToFileDescriptorProto(s.descriptor)
-//	d, err := m.MarshalToString(pb)
-//	if err != nil {
-//		return nil, err
-//	}
-//	f := Fingerprint(sha256.Sum256([]byte(d)))
-//	return &f, nil
-//}
