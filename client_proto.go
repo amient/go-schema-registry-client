@@ -21,10 +21,15 @@ import (
 	"io/ioutil"
 	"log"
 	"strings"
+	"sync"
 )
+
+var cacheProtoLock = sync.Mutex{}
 
 func (c *Client) RegisterProtobufType(ctx context.Context, subject string, protoType protoreflect.Message) (uint32, error) {
 
+	cacheProtoLock.Lock()
+	defer cacheProtoLock.Unlock()
 	if id, ok := c.cacheProto[protoType.Type()]; ok {
 		return id, nil
 	}

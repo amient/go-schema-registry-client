@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"sync"
 	"time"
 )
 
@@ -24,6 +25,8 @@ const schemaTypeProtobuf = "PROTOBUF"
 const schemaRegistryRequestTimeout = 30 * time.Second
 
 const magicByte = 0
+
+var cache1lock = sync.Mutex{}
 
 func NewClient(baseUrl string) *Client {
 	return NewClientWith(&Config{
@@ -158,14 +161,17 @@ func (c *Client) DeserializeInto(ctx context.Context, data []byte, into interfac
 }
 
 func (c *Client) GetSchema(ctx context.Context, schemaId uint32) (Schema, error) {
+	cache1lock.Lock()
 	result, ok := c.cache1[schemaId]
 	if ok {
+		cache1lock.Unlock()
 		return result, nil
 	}
 	httpClient := c.getHttpClient()
 	var uri = fmt.Sprintf("%s/schemas/ids/%d", c.config.Url, schemaId)
 	req, err := http.NewRequest("GET", uri, nil)
 	if err != nil {
+		cache1lock.Unlock()
 		return nil, fmt.Errorf("error constructing schema registry http request: %v", err)
 	}
 	ctxTimeout, cancel := context.WithTimeout(ctx, schemaRegistryRequestTimeout)
@@ -175,21 +181,26 @@ func (c *Client) GetSchema(ctx context.Context, schemaId uint32) (Schema, error)
 	}
 	resp, err := httpClient.Do(req.WithContext(ctxTimeout))
 	if err != nil {
+		cache1lock.Unlock()
 		return nil, fmt.Errorf("error calling schema registry http client: %v", err)
 	}
 	if resp.StatusCode != 200 {
+		cache1lock.Unlock()
 		return nil, fmt.Errorf("unexpected response from the schema registry: %v", resp.StatusCode)
 	}
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
+		cache1lock.Unlock()
 		return nil, err
 	}
 	err = resp.Body.Close()
 	if err != nil {
+		cache1lock.Unlock()
 		return nil, err
 	}
 	response := new(getSchemaResponse)
 	err = json.Unmarshal(body, response)
+	cache1lock.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("error while unmarshalling schema registry: %v", err)
 	}
@@ -207,7 +218,9 @@ func (c *Client) GetSchema(ctx context.Context, schemaId uint32) (Schema, error)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing schema registry response: %v", err)
 	}
+	cache1lock.Lock()
 	c.cache1[schemaId] = result
+	cache1lock.Unlock()
 
 	return result, nil
 }
@@ -291,10 +304,12 @@ func (c *Client) GetSubjectVersion(ctx context.Context, subject string, version 
 	if err != nil {
 		return nil, fmt.Errorf("error parsing schema registry response: %v", err)
 	}
+	cache1lock.Lock()
 	if c.cache1 == nil {
 		c.cache1 = make(map[uint32]Schema)
 	}
 	c.cache1[response.Id] = result
+	cache1lock.Unlock()
 	return result, nil
 }
 

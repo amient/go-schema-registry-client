@@ -4,13 +4,19 @@ import (
 	"context"
 	"fmt"
 	"github.com/amient/avro"
+	"sync"
 )
+
+var cacheAvroLock = sync.Mutex{}
 
 func (c *Client) RegisterAvroType(ctx context.Context, subject string, schema avro.Schema) (uint32, error) {
 	fp, err := schema.Fingerprint()
 	if err != nil {
 		return 0, err
 	}
+
+	cacheAvroLock.Lock()
+	defer cacheAvroLock.Unlock()
 	if id, ok := c.cacheAvro[*fp]; ok {
 		return id, nil
 	}
