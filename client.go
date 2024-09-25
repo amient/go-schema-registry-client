@@ -30,7 +30,7 @@ var cache1lock = sync.Mutex{}
 
 func NewClient(baseUrl string) *Client {
 	return NewClientWith(&Config{
-		Url: baseUrl,
+		Url:      baseUrl,
 		LogLevel: LogNothing,
 	})
 }
@@ -324,7 +324,7 @@ func (c *Client) registerSchemaUnderSubject(ctx context.Context, subject, schema
 		return 0, fmt.Errorf("could not marshal schema registry request: %v", err)
 	}
 	httpClient := c.getHttpClient()
-	var u = fmt.Sprintf("%s/subjects/%s/versions",  c.config.Url, url.PathEscape(subject))
+	var u = fmt.Sprintf("%s/subjects/%s/versions", c.config.Url, url.PathEscape(subject))
 	j := new(newSchemaResponse)
 	req, err := http.NewRequest("POST", u, bytes.NewReader(jsonRequest))
 	if err != nil {
@@ -340,13 +340,14 @@ func (c *Client) registerSchemaUnderSubject(ctx context.Context, subject, schema
 	if err != nil {
 		return 0, fmt.Errorf("error while making a http request for registering a new schema: %v", err)
 	}
-	if resp.StatusCode != 200 {
-		return 0, fmt.Errorf(resp.Status)
-	}
 	data, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return 0, fmt.Errorf("error reading schema registry http response body: %v", err)
 	}
+	if resp.StatusCode != 200 {
+		return 0, fmt.Errorf("error reading schema registry, status: %s, body: %s", resp.Status, string(data))
+	}
+
 	if err := json.Unmarshal(data, &j); err != nil {
 		return 0, fmt.Errorf("error unmarshaling schema registry response json: %v", err)
 	}
